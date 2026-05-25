@@ -1,0 +1,13 @@
+.catalog-page { padding: 40px 0 60px; min-height: 80vh; }
+.catalog-header { margin-bottom: 28px; }
+.filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 32px;
+  flex-wrap: wrap;
+}
+.filter-search { flex: 1; min-width: 220px; }
+.filter-select { width: auto; min-width: 160px; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 40px; }
+.empty-state { text-align: center; padding: 80px 20px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+@media (max-width: 768px) { .filters { flex-direction: column; } .filter-select { width: 100%; } }
