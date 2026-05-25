@@ -6,6 +6,14 @@ async function initDatabase() {
   try {
     console.log('🗄️  Проверяем базу данных...');
 
+    const [[connectionInfo]] = await conn.query(`
+      SELECT DATABASE() AS database_name, @@hostname AS host, @@port AS port
+    `);
+
+    console.log(
+      `🔌 Подключение: ${connectionInfo.database_name}@${connectionInfo.host}:${connectionInfo.port}`
+    );
+
     // ─── SCHEMA ───────────────────────────────────────────────
     await conn.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -287,7 +295,20 @@ async function initDatabase() {
          VALUES (?, ?, ?, 'single', ?, 1, 0)`,
         [quizId, text, image || null, explanation]
       );
-      const qId = res.insertId;
+
+      let qId = res.insertId;
+      if (!qId) {
+        const [[existingQuestion]] = await conn.query(
+          `SELECT id FROM questions WHERE quiz_id = ? AND text = ? LIMIT 1`,
+          [quizId, text]
+        );
+        qId = existingQuestion?.id || 0;
+      }
+
+      if (!qId) {
+        throw new Error(`Не удалось получить id вопроса: ${text}`);
+      }
+
       for (const [ans, correct] of answers) {
         await conn.query(
           `INSERT IGNORE INTO answers (question_id, text, is_correct) VALUES (?, ?, ?)`,
@@ -406,11 +427,30 @@ async function initDatabase() {
       ON DUPLICATE KEY UPDATE initialized_at = CURRENT_TIMESTAMP
     `);
 
+    const [[categoriesCountAfter]] = await conn.query('SELECT COUNT(*) AS count FROM categories');
+    const [[usersCountAfter]] = await conn.query('SELECT COUNT(*) AS count FROM users');
+    const [[quizzesCountAfter]] = await conn.query('SELECT COUNT(*) AS count FROM quizzes');
+    const [[questionsCountAfter]] = await conn.query('SELECT COUNT(*) AS count FROM questions');
+    const [[answersCountAfter]] = await conn.query('SELECT COUNT(*) AS count FROM answers');
+
     console.log('✅ База данных успешно заполнена!');
+    console.log(
+      `📊 Counts: categories=${categoriesCountAfter.count}, users=${usersCountAfter.count}, quizzes=${quizzesCountAfter.count}, questions=${questionsCountAfter.count}, answers=${answersCountAfter.count}`
+    );
     console.log('👤 Аккаунты:');
     console.log('   admin / Admin2024!');
     console.log('   elena_creator / Creator2024!');
     console.log('   test_user / User2024!');
+
+    if (
+      categoriesCountAfter.count === 0 ||
+      usersCountAfter.count === 0 ||
+      quizzesCountAfter.count === 0 ||
+      questionsCountAfter.count === 0 ||
+      answersCountAfter.count === 0
+    ) {
+      throw new Error('Seed completed but some tables are still empty');
+    }
 
   } catch (err) {
     console.error('❌ Ошибка инициализации БД:', err.message);
