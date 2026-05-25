@@ -61,7 +61,17 @@ async function initDatabase() {
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
     `);
 
-    await conn.query(`ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS slug VARCHAR(255) UNIQUE DEFAULT NULL`);
+    const [[slugColumn]] = await conn.query(`
+      SELECT COUNT(*) AS count
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'quizzes'
+        AND column_name = 'slug'
+    `);
+
+    if (slugColumn.count === 0) {
+      await conn.query(`ALTER TABLE quizzes ADD COLUMN slug VARCHAR(255) UNIQUE DEFAULT NULL`);
+    }
 
     await conn.query(`
       CREATE TABLE IF NOT EXISTS questions (
