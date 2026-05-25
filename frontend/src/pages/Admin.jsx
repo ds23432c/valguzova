@@ -1,232 +1,443 @@
-import React, { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import api from '../utils/api';
 import './Admin.css';
 
+function getDisplayName(user) {
+  if (!user) return 'Anonymous user';
+  return user.fullName || user.name || user.username || user.displayName || user.email || 'Anonymous user';
+}
+
+function normalizeListPayload(payload, keys) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
 export default function Admin() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('dashboard');
-  const [data, setData] = useState({});
+  const role = user?.role || 'user';
+  const isAdmin = role === 'admin';
+
   const [users, setUsers] = useState([]);
   const [quizzes, setQuizzes] = useState([]);
-  const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [sectionError, setSectionError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [search, setSearch] = useState('');
+  const [roleDrafts, setRoleDrafts] = useState({});
+  const [savingUserId, setSavingUserId] = useState(null);
+  const [deletingQuizId, setDeletingQuizId] = useState(null);
 
-  if (user?.role !== 'admin') return <Navigate to="/" />;
+  useEffect(() => {
+    let mounted = true;
 
-  const load = async (section) => {
-    setLoading(true);
+    async function loadAdminData() {
+      setLoading(true);
+      setSectionError('');
+      setNotice('');
+
+      try {
+        const [usersRes, quizzesRes] = await Promise.all([
+          api.get('/admin/users'),
+          api.get('/admin/quizzes'),
+        ]);
+
+        if (!mounted) return;
+
+        const userList = normalizeListPayload(usersRes.data, ['users', 'items']);
+        const quizList = normalizeListPayload(quizzesRes.data, ['quizzes', 'items']);
+
+        setUsers(userList);
+        setQuizzes(quizList);
+        setRoleDrafts(
+          Object.fromEntries(userList.map((item) => [item.id || item.userId, item.role || 'user']))
+        );
+      } catch (err) {
+        if (!mounted) return;
+        setSectionError(err?.response?.data?.message || err?.message || 'Не удалось загрузить админ-данные');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    if (isAdmin) {
+      loadAdminData();
+    } else {
+      setLoading(false);
+      setSectionError('Требуются права администратора.');
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [isAdmin]);
+
+  const stats = useMemo(
+    () => ({
+      userCount: users.length,
+      creatorCount: users.filter((item) => item.role === 'creator').length,
+      adminCount: users.filter((item) => item.role === 'admin').length,
+      quizCount: quizzes.length,
+    }),
+    [users, quizzes]
+  );
+
+  const handleRoleChange = (userId, value) => {
+    setRoleDrafts((current) => ({
+      ...current,
+      [userId]: value,
+    }));
+  };
+
+  const saveUserRole = async (userId) => {
+    setSavingUserId(userId);
+    setNotice('');
+    setSectionError('');
+
     try {
-      if (section === 'dashboard') { const r = await api.get('/admin/dashboard'); setData(r.data); }
-      if (section === 'users') { const r = await api.get('/admin/users'); setUsers(r.data || []); }
-      if (section === 'quizzes') { const r = await api.get('/admin/quizzes'); setQuizzes(r.data || []); }
-      if (section === 'violations') { const r = await api.get('/admin/violations'); setViolations(r.data || []); }
-    } finally { setLoading(false); }
+      const roleValue = roleDrafts[userId];
+      await api.put(`/admin/users/${userId}`, { role: roleValue });
+
+      setUsers((current) =>
+        current.map((item) =>
+          (item.id || item.userId) === userId ? { ...item, role: roleValue } : item
+        )
+      );
+      setNotice('Пользователь обновлён.');
+    } catch (err) {
+      setSectionError(err?.response?.data?.message || err?.message || 'Не удалось обновить пользователя');
+    } finally {
+      setSavingUserId(null);
+    }
   };
 
-  useEffect(() => { load(tab); }, [tab]);
+  const deleteQuiz = async (quizId) => {
+    const ok = window.confirm('Удалить квиз? Это действие нельзя отменить.');
+    if (!ok) return;
 
-  const toggleUser = async (id, field, val) => {
-    await api.put(`/admin/users/${id}`, { [field]: val });
-    setUsers(u => u.map(x => x.id === id ? {...x, [field]: val} : x));
+    setDeletingQuizId(quizId);
+    setNotice('');
+    setSectionError('');
+
+    try {
+      await api.delete(`/admin/quizzes/${quizId}`);
+      setQuizzes((current) => current.filter((item) => (item.id || item.quizId) !== quizId));
+      setNotice('Квиз удалён.');
+    } catch (err) {
+      setSectionError(err?.response?.data?.message || err?.message || 'Не удалось удалить квиз');
+    } finally {
+      setDeletingQuizId(null);
+    }
   };
 
-  const toggleQuiz = async (id) => {
-    await api.put(`/admin/quizzes/${id}/toggle`);
-    setQuizzes(q => q.map(x => x.id === id ? {...x, is_published: x.is_published ? 0 : 1} : x));
-  };
+  const filteredUsers = users.filter((item) => {
+    const term = search.trim().toLowerCase();
+    if (!term) return true;
+    return [item.username, item.email, item.role]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(term));
+  });
 
-  const deleteQuiz = async (id) => {
-    if (!window.confirm('Удалить квиз?')) return;
-    await api.delete(`/admin/quizzes/${id}`);
-    setQuizzes(q => q.filter(x => x.id !== id));
-  };
+  const filteredQuizzes = quizzes.filter((item) => {
+    const term = search.trim().toLowerCase();
+    if (!term) return true;
+    return [item.title, item.description, item.quiz_type, item.author]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(term));
+  });
 
-  const TABS = [
-    { key: 'dashboard', label: '📊 Дашборд' },
-    { key: 'users', label: '👥 Пользователи' },
-    { key: 'quizzes', label: '📝 Квизы' },
-    { key: 'violations', label: '⚠️ Нарушения' },
-  ];
-
-  const VIOLATION_LABELS = {
-    tab_switch: 'Смена вкладки', copy_text: 'Копирование', right_click: 'ПКМ',
-    hotkey: 'Горячая клавиша', time_exceeded: 'Превышение времени'
-  };
+  if (!isAdmin) {
+    return (
+      <div className="admin-page">
+        <div className="admin-container" style={shellStyle}>
+          <div style={panelStyle}>
+            <h1 style={{ marginTop: 0 }}>Админ-панель</h1>
+            <p style={{ color: '#f0a6a6', marginBottom: 0 }}>
+              {sectionError || 'Требуются права администратора.'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="admin-page">
-      <div className="admin-sidebar">
-        <div className="admin-logo">⚡ <span className="gradient-text">Квизория</span></div>
-        <nav className="admin-nav">
-          {TABS.map(t => (
-            <button key={t.key} className={`admin-nav-item ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)}>
-              {t.label}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <div className="admin-container" style={shellStyle}>
+        <div style={headerStyle}>
+          <div>
+            <p style={eyebrowStyle}>Administration</p>
+            <h1 style={{ margin: '0 0 10px', fontSize: 'clamp(2rem, 4vw, 3.4rem)' }}>
+              {getDisplayName(user)}
+            </h1>
+            <p style={{ margin: 0, color: '#b0bac7', maxWidth: 780 }}>
+              Управляйте пользователями, квизами и контентом платформы из одного места.
+            </p>
+          </div>
 
-      <main className="admin-main">
-        <div className="admin-topbar">
-          <h1 className="admin-page-title">{TABS.find(t => t.key === tab)?.label}</h1>
-          <span className="badge badge-pink">Администратор</span>
+          <div style={summaryGrid}>
+            {[
+              { label: 'Users', value: stats.userCount },
+              { label: 'Creators', value: stats.creatorCount },
+              { label: 'Admins', value: stats.adminCount },
+              { label: 'Quizzes', value: stats.quizCount },
+            ].map((item) => (
+              <div key={item.label} style={summaryCardStyle}>
+                <div style={{ color: '#8c97a8', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  {item.label}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 28, fontWeight: 800 }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {loading ? <div className="page-loader"><div className="spinner" /></div> : (
+        <div style={toolbarStyle}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск пользователей или квизов"
+            style={inputStyle}
+          />
+          <button type="button" onClick={() => window.location.reload()} style={buttonStyle}>
+            Обновить
+          </button>
+        </div>
 
-          <>
-            {/* ── DASHBOARD ── */}
-            {tab === 'dashboard' && (
-              <div className="dashboard-content fade-in">
-                <div className="admin-stats-grid">
-                  {[
-                    { label: 'Пользователей', val: data.stats?.users, icon: '👥', color: 'purple' },
-                    { label: 'Квизов', val: data.stats?.quizzes, icon: '📝', color: 'teal' },
-                    { label: 'Прохождений', val: data.stats?.attempts, icon: '▶', color: 'amber' },
-                    { label: 'Нарушений', val: data.stats?.violations, icon: '⚠️', color: 'red' },
-                  ].map((s, i) => (
-                    <div key={i} className={`admin-stat-card asc-${s.color}`}>
-                      <div className="asc-icon">{s.icon}</div>
-                      <div className="asc-val">{s.val ?? 0}</div>
-                      <div className="asc-lbl">{s.label}</div>
-                    </div>
-                  ))}
-                </div>
+        {loading ? <div style={panelStyle}>Загружаем данные…</div> : null}
+        {sectionError ? (
+          <div style={{ ...panelStyle, borderColor: 'rgba(235, 87, 87, 0.24)', color: '#ffb4b4' }}>
+            {sectionError}
+          </div>
+        ) : null}
+        {notice ? (
+          <div style={{ ...panelStyle, borderColor: 'rgba(48, 242, 184, 0.24)', color: '#9af5d6' }}>{notice}</div>
+        ) : null}
 
-                <div className="dashboard-grid">
-                  <div className="card">
-                    <h3 className="card-title">Новые пользователи</h3>
-                    {data.recentUsers?.map(u => (
-                      <div key={u.id} className="dash-row">
-                        <div className="dash-ava">{u.username[0].toUpperCase()}</div>
-                        <div>
-                          <p style={{fontWeight:600, color:'var(--text-white)', fontSize:14}}>{u.username}</p>
-                          <p style={{fontSize:12, color:'var(--text-accent)'}}>{u.email}</p>
-                        </div>
-                        <span className={`badge badge-${u.role === 'admin' ? 'pink' : u.role === 'creator' ? 'teal' : 'purple'} ml-auto`}>{u.role}</span>
+        <div style={gridStyle}>
+          <section style={panelStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={{ margin: 0 }}>Пользователи</h2>
+              <span style={mutedText}>{filteredUsers.length} показано</span>
+            </div>
+
+            <div style={listStyle}>
+              {filteredUsers.map((item) => {
+                const id = item.id || item.userId;
+                return (
+                  <div key={id} style={rowStyle}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 700, overflowWrap: 'anywhere' }}>
+                        {item.username || item.email || `User ${id}`}
                       </div>
-                    ))}
-                  </div>
-                  <div className="card">
-                    <h3 className="card-title">Топ квизов</h3>
-                    {data.topQuizzes?.map((q, i) => (
-                      <div key={q.uuid} className="dash-row">
-                        <span style={{fontSize:18, minWidth:24}}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`}</span>
-                        <p style={{flex:1, fontWeight:600, color:'var(--text-white)', fontSize:14}}>{q.title}</p>
-                        <span style={{color:'var(--text-accent)', fontSize:13}}>{q.plays_count?.toLocaleString()}</span>
+                      <div style={{ color: '#9aa6b7', fontSize: 13, overflowWrap: 'anywhere' }}>
+                        {item.email || 'Нет email'}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ── USERS ── */}
-            {tab === 'users' && (
-              <div className="fade-in">
-                <div className="admin-table-wrap">
-                  <table className="admin-table">
-                    <thead>
-                      <tr>
-                        <th>Пользователь</th>
-                        <th>Email</th>
-                        <th>Роль</th>
-                        <th>Статус</th>
-                        <th>Действия</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map(u => (
-                        <tr key={u.id}>
-                          <td style={{fontWeight:600, color:'var(--text-white)'}}>{u.username}</td>
-                          <td style={{color:'var(--text-accent)'}}>{u.email}</td>
-                          <td>
-                            <select className="admin-select" value={u.role} onChange={e => toggleUser(u.id, 'role', e.target.value)}>
-                              <option value="user">Участник</option>
-                              <option value="creator">Создатель</option>
-                              <option value="admin">Администратор</option>
-                            </select>
-                          </td>
-                          <td>
-                            <span className={`badge ${u.is_blocked ? 'badge-red' : 'badge-green'}`}>
-                              {u.is_blocked ? 'Заблокирован' : 'Активен'}
-                            </span>
-                          </td>
-                          <td>
-                            <button
-                              className={`btn btn-sm ${u.is_blocked ? 'btn-outline' : 'btn-danger'}`}
-                              onClick={() => toggleUser(u.id, 'is_blocked', !u.is_blocked)}
-                            >{u.is_blocked ? '🔓 Разблокировать' : '🔒 Заблокировать'}</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* ── QUIZZES ── */}
-            {tab === 'quizzes' && (
-              <div className="fade-in">
-                <div className="admin-table-wrap">
-                  <table className="admin-table">
-                    <thead>
-                      <tr><th>Название</th><th>Автор</th><th>Тип</th><th>Прохождений</th><th>Статус</th><th>Действия</th></tr>
-                    </thead>
-                    <tbody>
-                      {quizzes.map(q => (
-                        <tr key={q.id}>
-                          <td style={{fontWeight:600, color:'var(--text-white)', maxWidth:220}}>{q.title}</td>
-                          <td style={{color:'var(--text-accent)'}}>@{q.author}</td>
-                          <td><span className="type-label">{q.quiz_type}</span></td>
-                          <td style={{color:'var(--text-primary)'}}>{(q.plays_count||0).toLocaleString()}</td>
-                          <td><span className={`badge ${q.is_published ? 'badge-green' : 'badge-amber'}`}>{q.is_published ? 'Опубликован' : 'Черновик'}</span></td>
-                          <td style={{display:'flex', gap:8}}>
-                            <button className="btn btn-outline btn-sm" onClick={() => toggleQuiz(q.id)}>
-                              {q.is_published ? '↙ Снять' : '↑ Опубл.'}
-                            </button>
-                            <button className="btn btn-danger btn-sm" onClick={() => deleteQuiz(q.id)}>🗑</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* ── VIOLATIONS ── */}
-            {tab === 'violations' && (
-              <div className="fade-in">
-                {violations.length === 0
-                  ? <div className="empty-state"><div style={{fontSize:40}}>✅</div><p style={{color:'var(--text-secondary)'}}>Нарушений не зафиксировано</p></div>
-                  : <div className="admin-table-wrap">
-                      <table className="admin-table">
-                        <thead>
-                          <tr><th>Пользователь</th><th>Квиз</th><th>Нарушение</th><th>Описание</th><th>Дата</th></tr>
-                        </thead>
-                        <tbody>
-                          {violations.map(v => (
-                            <tr key={v.id}>
-                              <td style={{fontWeight:600, color:'var(--text-white)'}}>{v.username}</td>
-                              <td style={{color:'var(--text-accent)'}}>{v.quiz_title}</td>
-                              <td><span className="badge badge-red">{VIOLATION_LABELS[v.violation_type] || v.violation_type}</span></td>
-                              <td style={{color:'var(--text-secondary)', fontSize:13}}>{v.description || '—'}</td>
-                              <td style={{color:'var(--text-accent)', fontSize:12}}>{new Date(v.created_at).toLocaleString('ru')}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <div style={{ marginTop: 6, color: '#8ee7c8', fontSize: 12, textTransform: 'uppercase' }}>
+                        {item.role || 'user'}
+                      </div>
                     </div>
-                }
-              </div>
-            )}
-          </>
-        )}
-      </main>
+
+                    <div style={{ display: 'grid', gap: 8, minWidth: 180 }}>
+                      <select
+                        value={roleDrafts[id] || item.role || 'user'}
+                        onChange={(e) => handleRoleChange(id, e.target.value)}
+                        style={inputStyle}
+                      >
+                        <option value="user">user</option>
+                        <option value="creator">creator</option>
+                        <option value="admin">admin</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => saveUserRole(id)}
+                        disabled={savingUserId === id}
+                        style={buttonStyle}
+                      >
+                        {savingUserId === id ? 'Сохраняем…' : 'Сохранить роль'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {!filteredUsers.length ? <div style={emptyStyle}>Пользователи не найдены.</div> : null}
+            </div>
+          </section>
+
+          <section style={panelStyle}>
+            <div style={sectionHeaderStyle}>
+              <h2 style={{ margin: 0 }}>Квизы</h2>
+              <span style={mutedText}>{filteredQuizzes.length} показано</span>
+            </div>
+
+            <div style={listStyle}>
+              {filteredQuizzes.map((item) => {
+                const quizId = item.id || item.quizId;
+                return (
+                  <div key={quizId} style={rowStyle}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 700, overflowWrap: 'anywhere' }}>{item.title || 'Без названия'}</div>
+                      <div style={{ marginTop: 6, color: '#9aa6b7', fontSize: 13, overflowWrap: 'anywhere' }}>
+                        {item.description || 'Нет описания'}
+                      </div>
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap', color: '#8ee7c8', fontSize: 12 }}>
+                        <span>{item.quiz_type || 'uncategorized'}</span>
+                        {item.author ? <span>• @{item.author}</span> : null}
+                        {item.created_at ? <span>• {new Date(item.created_at).toLocaleDateString()}</span> : null}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gap: 8, minWidth: 140 }}>
+                      <button
+                        type="button"
+                        onClick={() => deleteQuiz(quizId)}
+                        disabled={deletingQuizId === quizId}
+                        style={{ ...buttonStyle, borderColor: 'rgba(235,87,87,0.24)' }}
+                      >
+                        {deletingQuizId === quizId ? 'Удаляем…' : 'Удалить'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {!filteredQuizzes.length ? <div style={emptyStyle}>Квизы не найдены.</div> : null}
+            </div>
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
+
+const shellStyle = {
+  maxWidth: 1280,
+  margin: '0 auto',
+  padding: '32px 0 56px',
+};
+
+const eyebrowStyle = {
+  margin: '0 0 8px',
+  color: '#8ee7c8',
+  letterSpacing: 1.5,
+  textTransform: 'uppercase',
+  fontSize: 12,
+};
+
+const headerStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)',
+  gap: 20,
+  alignItems: 'start',
+  marginBottom: 20,
+};
+
+const summaryGrid = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 12,
+};
+
+const summaryCardStyle = {
+  padding: 16,
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(12, 16, 24, 0.96)',
+  boxShadow: '0 14px 42px rgba(0, 0, 0, 0.28)',
+};
+
+const toolbarStyle = {
+  display: 'flex',
+  gap: 12,
+  flexWrap: 'wrap',
+  marginBottom: 16,
+};
+
+const gridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+  gap: 18,
+  alignItems: 'start',
+};
+
+const panelStyle = {
+  padding: 20,
+  background: 'rgba(12, 16, 24, 0.96)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  boxShadow: '0 18px 54px rgba(0, 0, 0, 0.28)',
+};
+
+const sectionHeaderStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginBottom: 14,
+};
+
+const mutedText = {
+  color: '#97a3b6',
+  fontSize: 13,
+};
+
+const listStyle = {
+  display: 'grid',
+  gap: 12,
+};
+
+const rowStyle = {
+  display: 'flex',
+  gap: 16,
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  padding: 16,
+  border: '1px solid rgba(255,255,255,0.07)',
+  background: 'rgba(255,255,255,0.03)',
+  flexWrap: 'wrap',
+};
+
+const emptyStyle = {
+  color: '#97a3b6',
+  padding: 16,
+  border: '1px dashed rgba(255,255,255,0.12)',
+};
+
+const inputStyle = {
+  width: '100%',
+  padding: '12px 14px',
+  border: '1px solid rgba(255,255,255,0.1)',
+  background: 'rgba(5, 8, 13, 0.92)',
+  color: '#f4f7fb',
+  outline: 'none',
+  fontSize: 15,
+};
+
+const buttonStyle = {
+  padding: '12px 14px',
+  border: '1px solid rgba(142, 231, 200, 0.28)',
+  background: 'linear-gradient(135deg, rgba(142, 231, 200, 0.2), rgba(48, 242, 184, 0.08))',
+  color: '#ecfff7',
+  fontWeight: 800,
+  letterSpacing: 0.3,
+  cursor: 'pointer',
+};
+
+const statCardStyle = {
+  padding: 18,
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(14, 18, 27, 0.96)',
+  boxShadow: '0 14px 42px rgba(0, 0, 0, 0.3)',
+};
+
+const errorBoxStyle = {
+  padding: 14,
+  background: 'rgba(235, 87, 87, 0.08)',
+  border: '1px solid rgba(235, 87, 87, 0.22)',
+  color: '#ffb4b4',
+};
+
+export { statCardStyle, errorBoxStyle };
