@@ -169,18 +169,6 @@ async function initDatabase() {
       )
     `);
 
-    // ─── ПРОВЕРЯЕМ — есть ли реальные данные? ───────────────
-    const [[categoriesCount]] = await conn.query('SELECT COUNT(*) AS count FROM categories');
-    const [[usersCount]] = await conn.query('SELECT COUNT(*) AS count FROM users');
-    const [[quizzesCount]] = await conn.query('SELECT COUNT(*) AS count FROM quizzes');
-    const [[questionsCount]] = await conn.query('SELECT COUNT(*) AS count FROM questions');
-    const [[answersCount]] = await conn.query('SELECT COUNT(*) AS count FROM answers');
-
-    if (categoriesCount.count > 0 && usersCount.count > 0 && quizzesCount.count > 0 && questionsCount.count > 0 && answersCount.count > 0) {
-      console.log('✅ БД уже заполнена, пропускаем seed');
-      return;
-    }
-
     console.log('🌱 Заполняем базу данных тестовыми данными...');
 
     // ─── CATEGORIES ───────────────────────────────────────────
