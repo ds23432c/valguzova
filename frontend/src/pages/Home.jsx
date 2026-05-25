@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 import api from '../utils/api';
 import QuizCard from '../components/quiz/QuizCard';
 import './Home.css';
@@ -16,12 +17,21 @@ const CATEGORIES = [
 ];
 
 export default function Home() {
+  const { user } = useAuth();
   const [quizzes, setQuizzes] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     api.get('/quizzes?limit=8').then(r => setQuizzes(r.data.quizzes || [])).finally(() => setLoading(false));
   }, []);
+
+  const primaryCta = user
+    ? { to: '/quizzes', label: 'Перейти в каталог →' }
+    : { to: '/quizzes', label: 'Начать играть →' };
+
+  const secondaryCta = user
+    ? { to: user.role === 'admin' ? '/admin' : '/profile', label: user.role === 'admin' ? 'Открыть панель →' : 'Мой профиль →' }
+    : { to: '/register', label: 'Создать аккаунт →' };
 
   return (
     <div className="home">
@@ -45,8 +55,8 @@ export default function Home() {
             Умная защита от мошенничества для честных результатов.
           </p>
           <div className="hero-btns">
-            <Link to="/quizzes" className="btn btn-primary btn-lg">Начать играть →</Link>
-            <Link to="/register" className="btn btn-outline btn-lg">Создать квиз</Link>
+            <Link to={primaryCta.to} className="btn btn-primary btn-lg">{primaryCta.label}</Link>
+            <Link to={secondaryCta.to} className="btn btn-outline btn-lg">{secondaryCta.label}</Link>
           </div>
           <div className="hero-stats">
             <div className="hstat"><span className="hstat-n gradient-text">500+</span><span className="hstat-l">квизов</span></div>
@@ -118,9 +128,9 @@ export default function Home() {
       {/* CTA */}
       <section className="cta-section">
         <div className="container cta-inner">
-          <h2 className="cta-title">Готов проверить себя?</h2>
-          <p className="cta-sub">Регистрируйся бесплатно и начни прямо сейчас</p>
-          <Link to="/register" className="btn btn-primary btn-lg">Создать аккаунт →</Link>
+          <h2 className="cta-title">{user ? 'Продолжай играть' : 'Готов проверить себя?'}</h2>
+          <p className="cta-sub">{user ? 'Открой каталог и выбери новый квиз' : 'Регистрируйся бесплатно и начни прямо сейчас'}</p>
+          <Link to={user ? '/quizzes' : '/register'} className="btn btn-primary btn-lg">{user ? 'В каталог →' : 'Создать аккаунт →'}</Link>
         </div>
       </section>
     </div>
