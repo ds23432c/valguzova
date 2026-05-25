@@ -39,6 +39,7 @@ async function initDatabase() {
       CREATE TABLE IF NOT EXISTS quizzes (
         id INT AUTO_INCREMENT PRIMARY KEY,
         uuid VARCHAR(36) UNIQUE NOT NULL,
+        slug VARCHAR(255) UNIQUE DEFAULT NULL,
         title VARCHAR(255) NOT NULL,
         description TEXT,
         cover_image VARCHAR(255) DEFAULT NULL,
@@ -60,17 +61,20 @@ async function initDatabase() {
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
     `);
 
+    await conn.query(`ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS slug VARCHAR(255) UNIQUE DEFAULT NULL`);
+
     await conn.query(`
       CREATE TABLE IF NOT EXISTS questions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         quiz_id INT NOT NULL,
-        text TEXT NOT NULL,
+        text VARCHAR(1000) NOT NULL,
         image VARCHAR(255) DEFAULT NULL,
         question_type ENUM('single','multiple','text') DEFAULT 'single',
         explanation TEXT DEFAULT NULL,
         points INT DEFAULT 1,
         time_limit INT DEFAULT NULL,
         order_num INT DEFAULT 0,
+        UNIQUE KEY unique_quiz_question (quiz_id, text),
         FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
     `);
@@ -82,6 +86,7 @@ async function initDatabase() {
         text VARCHAR(500) NOT NULL,
         is_correct TINYINT(1) DEFAULT 0,
         order_num INT DEFAULT 0,
+        UNIQUE KEY unique_question_answer (question_id, text),
         FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
     `);
@@ -154,10 +159,15 @@ async function initDatabase() {
       )
     `);
 
-    // ─── ПРОВЕРЯЕМ — уже заполнено? ──────────────────────────
-    const [check] = await conn.query('SELECT id FROM db_initialized LIMIT 1');
-    if (check.length > 0) {
-      console.log('✅ БД уже инициализирована, пропускаем seed');
+    // ─── ПРОВЕРЯЕМ — есть ли реальные данные? ───────────────
+    const [[categoriesCount]] = await conn.query('SELECT COUNT(*) AS count FROM categories');
+    const [[usersCount]] = await conn.query('SELECT COUNT(*) AS count FROM users');
+    const [[quizzesCount]] = await conn.query('SELECT COUNT(*) AS count FROM quizzes');
+    const [[questionsCount]] = await conn.query('SELECT COUNT(*) AS count FROM questions');
+    const [[answersCount]] = await conn.query('SELECT COUNT(*) AS count FROM answers');
+
+    if (categoriesCount.count > 0 && usersCount.count > 0 && quizzesCount.count > 0 && questionsCount.count > 0 && answersCount.count > 0) {
+      console.log('✅ БД уже заполнена, пропускаем seed');
       return;
     }
 
@@ -165,7 +175,7 @@ async function initDatabase() {
 
     // ─── CATEGORIES ───────────────────────────────────────────
     await conn.query(`
-      INSERT INTO categories (name, slug, icon, color) VALUES
+      INSERT IGNORE INTO categories (name, slug, icon, color) VALUES
       ('Наука и природа', 'science', '🔬', '#7C3AED'),
       ('История', 'history', '📜', '#DC2626'),
       ('Поп-культура', 'popculture', '🎬', '#DB2777'),
@@ -182,7 +192,7 @@ async function initDatabase() {
     const userHash = await bcrypt.hash('User2024!', 10);
 
     await conn.query(`
-      INSERT INTO users (uuid, username, email, password_hash, role, bio) VALUES
+      INSERT IGNORE INTO users (uuid, username, email, password_hash, role, bio) VALUES
       (UUID(), 'admin', 'admin@kvizoria.ru', ?, 'admin', 'Главный администратор платформы Квизория'),
       (UUID(), 'elena_creator', 'elena@kvizoria.ru', ?, 'creator', 'Создаю образовательные квизы по истории и науке'),
       (UUID(), 'test_user', 'user@kvizoria.ru', ?, 'user', 'Люблю проходить квизы по вечерам')
@@ -199,48 +209,56 @@ async function initDatabase() {
     // Используем реальные изображения Unsplash (без авторизации)
     const quizData = [
       {
+        slug: 'great-science-breakthroughs',
         title: 'Великие открытия в науке',
         desc: 'Проверь свои знания о самых важных научных открытиях человечества — от теории относительности до ДНК.',
         cover: 'https://images.unsplash.com/photo-1507413245164-6160d8298b31?w=600&q=80',
         cat: 1, author: creatorId, type: 'classic', diff: 'medium', time: 600, attempts: 3
       },
       {
+        slug: 'russian-history-from-rurik',
         title: 'История России: от Рюрика до наших дней',
         desc: 'Углублённый квиз по ключевым событиям российской истории. Для тех, кто знает историю не по учебникам.',
         cover: 'https://images.unsplash.com/photo-1547448415-e9f5b28e570d?w=600&q=80',
         cat: 2, author: creatorId, type: 'timed', diff: 'hard', time: 900, attempts: 2
       },
       {
+        slug: 'marvel-vs-dc',
         title: 'Marvel против DC: кто знает комиксы лучше?',
         desc: 'Знаешь, кто такой Thanos и почему Batman не супергерой? Докажи это здесь!',
         cover: 'https://images.unsplash.com/photo-1531259683007-016a7b628fc3?w=600&q=80',
         cat: 3, author: adminId, type: 'picture', diff: 'easy', time: 300, attempts: 5
       },
       {
+        slug: 'programming-basics',
         title: 'Основы программирования',
         desc: 'Переменные, циклы, функции — база для каждого разработчика. Подходит для начинающих.',
         cover: 'https://images.unsplash.com/photo-1461749280684-dccba630e2f6?w=600&q=80',
         cat: 4, author: adminId, type: 'classic', diff: 'easy', time: 480, attempts: 10
       },
       {
+        slug: 'world-cup',
         title: 'Чемпионат мира по футболу',
         desc: 'Все чемпионы, рекорды, легенды. Насколько хорошо ты знаешь историю главного турнира планеты?',
         cover: 'https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=600&q=80',
         cat: 5, author: creatorId, type: 'classic', diff: 'medium', time: 420, attempts: 3
       },
       {
+        slug: 'world-capitals',
         title: 'Столицы мира',
         desc: 'Знаешь ли ты столицы всех стран? От простых до самых неожиданных — проверь себя!',
         cover: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=600&q=80',
         cat: 6, author: adminId, type: 'timed', diff: 'medium', time: 360, attempts: 5
       },
       {
+        slug: 'rock-legends',
         title: 'Легенды рок-музыки',
         desc: 'Beatles, Queen, Led Zeppelin, Nirvana — знаешь ли ты всё о культовых группах?',
         cover: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=600&q=80',
         cat: 7, author: creatorId, type: 'picture', diff: 'medium', time: 540, attempts: 3
       },
       {
+        slug: 'russian-classic-literature',
         title: 'Русская классическая литература',
         desc: 'Пушкин, Толстой, Достоевский, Чехов — насколько хорошо ты помнишь школьную программу?',
         cover: 'https://images.unsplash.com/photo-1524578271613-d550eacf6090?w=600&q=80',
@@ -250,11 +268,11 @@ async function initDatabase() {
 
     for (const q of quizData) {
       await conn.query(`
-        INSERT INTO quizzes (uuid, title, description, cover_image, category_id, author_id,
+        INSERT IGNORE INTO quizzes (slug, uuid, title, description, cover_image, category_id, author_id,
           quiz_type, difficulty, time_limit, max_attempts, is_public, is_published,
           shuffle_questions, shuffle_answers, plays_count)
-        VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, FLOOR(RAND()*500)+20)
-      `, [q.title, q.desc, q.cover, q.cat, q.author, q.type, q.diff, q.time, q.attempts]);
+        VALUES (?, UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, FLOOR(RAND()*500)+20)
+      `, [q.slug, q.title, q.desc, q.cover, q.cat, q.author, q.type, q.diff, q.time, q.attempts]);
     }
 
     // ─── QUESTIONS & ANSWERS ──────────────────────────────────
@@ -267,14 +285,14 @@ async function initDatabase() {
     // Helper: вставить вопрос + ответы
     async function insertQA(quizId, text, image, explanation, answers) {
       const [res] = await conn.query(
-        `INSERT INTO questions (quiz_id, text, image, question_type, explanation, points, order_num)
+        `INSERT IGNORE INTO questions (quiz_id, text, image, question_type, explanation, points, order_num)
          VALUES (?, ?, ?, 'single', ?, 1, 0)`,
         [quizId, text, image || null, explanation]
       );
       const qId = res.insertId;
       for (const [ans, correct] of answers) {
         await conn.query(
-          `INSERT INTO answers (question_id, text, is_correct) VALUES (?, ?, ?)`,
+          `INSERT IGNORE INTO answers (question_id, text, is_correct) VALUES (?, ?, ?)`,
           [qId, ans, correct ? 1 : 0]
         );
       }
@@ -366,13 +384,16 @@ async function initDatabase() {
       [['Россия', true], ['Бразилия', false], ['Германия', false], ['ЮАР', false]]);
 
     // ─── SAMPLE ATTEMPTS ─────────────────────────────────────
-    await conn.query(`
-      INSERT INTO quiz_attempts (uuid, quiz_id, user_id, score, max_score, percent_score, time_spent, is_passed, violations_count)
-      VALUES
-      (UUID(), ?, ?, 4, 5, 80.00, 342, 1, 0),
-      (UUID(), ?, ?, 3, 5, 60.00, 285, 1, 1),
-      (UUID(), ?, ?, 5, 5, 100.00, 198, 1, 0)
-    `, [q1.id, userId, q1.id, userId, q1.id, userId]);
+    const [[attemptsCount]] = await conn.query('SELECT COUNT(*) AS count FROM quiz_attempts');
+    if (attemptsCount.count === 0) {
+      await conn.query(`
+        INSERT INTO quiz_attempts (uuid, quiz_id, user_id, score, max_score, percent_score, time_spent, is_passed, violations_count)
+        VALUES
+        (UUID(), ?, ?, 4, 5, 80.00, 342, 1, 0),
+        (UUID(), ?, ?, 3, 5, 60.00, 285, 1, 1),
+        (UUID(), ?, ?, 5, 5, 100.00, 198, 1, 0)
+      `, [q1.id, userId, q1.id, userId, q1.id, userId]);
+    }
 
     // ─── LEADERBOARD ─────────────────────────────────────────
     await conn.query(`
@@ -382,7 +403,10 @@ async function initDatabase() {
     `, [q1.id, userId]);
 
     // ─── MARK AS DONE ─────────────────────────────────────────
-    await conn.query(`INSERT INTO db_initialized (id) VALUES (1)`);
+    await conn.query(`
+      INSERT INTO db_initialized (id) VALUES (1)
+      ON DUPLICATE KEY UPDATE initialized_at = CURRENT_TIMESTAMP
+    `);
 
     console.log('✅ База данных успешно заполнена!');
     console.log('👤 Аккаунты:');
