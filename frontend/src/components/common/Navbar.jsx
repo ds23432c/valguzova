@@ -11,6 +11,7 @@ export default function Navbar() {
 
   const handleLogout = () => { logout(); navigate('/'); setMenuOpen(false); };
   const isActive = (path) => location.pathname === path;
+  const isCreator = user?.role === 'creator' || user?.role === 'admin';
 
   return (
     <nav className="navbar">
@@ -32,6 +33,20 @@ export default function Navbar() {
         </div>
 
         <div className="navbar-actions">
+          {user ? (
+            <div className="navbar-quick-actions">
+              {isCreator && (
+                <Link to="/profile#create-quiz" className="btn btn-primary btn-sm">
+                  Создать квиз
+                </Link>
+              )}
+              {user?.role === 'admin' && (
+                <Link to="/admin" className="btn btn-outline btn-sm">
+                  Редактировать
+                </Link>
+              )}
+            </div>
+          ) : null}
           {user ? (
             <div className="user-menu">
               <div className="user-avatar" onClick={() => setMenuOpen(!menuOpen)}>

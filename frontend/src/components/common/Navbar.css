@@ -57,6 +57,17 @@
   flex-shrink: 0;
 }
 
+.navbar-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.navbar-quick-actions .btn {
+  white-space: nowrap;
+}
+
 .auth-btns { display: flex; gap: 8px; align-items: center; }
 
 .user-menu { position: relative; }
@@ -159,4 +170,7 @@
   .navbar-links.open { display: flex; }
   .auth-btns .btn-outline { display: none; }
   .navbar-logo { position: relative; z-index: 101; }
+  .navbar-quick-actions {
+    display: none;
+  }
 }
