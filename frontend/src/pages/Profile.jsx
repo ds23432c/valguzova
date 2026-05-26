@@ -1,8 +1,37 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api from '../utils/api';
 import './Profile.css';
+
+const EXAMPLE_QUIZ_QUESTIONS = [
+  {
+    text: 'Какой океан является самым большим на Земле?',
+    question_type: 'single',
+    points: 1,
+    explanation: 'Тихий океан — крупнейший по площади и объёму.',
+    answers: [
+      { text: 'Тихий океан', is_correct: true },
+      { text: 'Атлантический океан', is_correct: false },
+      { text: 'Индийский океан', is_correct: false },
+      { text: 'Северный Ледовитый океан', is_correct: false },
+    ],
+  },
+  {
+    text: 'Какие из этих языков являются JavaScript-фреймворками?',
+    question_type: 'multiple',
+    points: 2,
+    explanation: 'В этом примере можно отметить несколько вариантов.',
+    answers: [
+      { text: 'React', is_correct: true },
+      { text: 'Vue', is_correct: true },
+      { text: 'HTML', is_correct: false },
+      { text: 'Node.js', is_correct: false },
+    ],
+  },
+];
+
+const EXAMPLE_QUIZ_JSON = JSON.stringify(EXAMPLE_QUIZ_QUESTIONS, null, 2);
 
 const initialQuizDraft = {
   title: '',
@@ -10,15 +39,7 @@ const initialQuizDraft = {
   category_id: '',
   quiz_type: 'classic',
   timeLimitMinutes: '',
-  questionsJson: `[
-  {
-    "text": "Sample question",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answerIndex": 0,
-    "points": 1,
-    "explanation": ""
-  }
-]`,
+  questionsJson: EXAMPLE_QUIZ_JSON,
 };
 
 function getDisplayName(user) {
@@ -69,7 +90,9 @@ function buildQuestionsFromDraft(questionsJson) {
 
     const answers = answersSource.map((answer, answerIndex) => ({
       text: String(answer?.text || answer?.label || answer || '').trim(),
-      is_correct: Boolean(answer?.is_correct ?? answer?.correct ?? answerIndex === Number(question?.answerIndex ?? question?.correctIndex ?? 0)),
+      is_correct: Boolean(
+        answer?.is_correct ?? answer?.correct ?? answerIndex === Number(question?.answerIndex ?? question?.correctIndex ?? 0)
+      ),
     }));
 
     if (!answers.some((answer) => answer.is_correct)) {
@@ -88,10 +111,40 @@ function buildQuestionsFromDraft(questionsJson) {
   });
 }
 
+function parseQuestionsFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      try {
+        const content = String(reader.result || '');
+        const parsed = JSON.parse(content);
+
+        if (!Array.isArray(parsed)) {
+          throw new Error('JSON-файл должен содержать массив вопросов');
+        }
+
+        resolve(content);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => {
+      reject(new Error('Не удалось прочитать JSON-файл'));
+    };
+
+    reader.readAsText(file);
+  });
+}
+
 function Profile() {
   const { user } = useAuth();
   const role = user?.role || 'user';
-  const isCreator = role === 'creator' || role === 'admin';
+  const isAdmin = role === 'admin';
+  const canCreateQuiz = Boolean(user);
+
+  const questionsInputRef = useRef(null);
 
   const [history, setHistory] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -100,6 +153,7 @@ function Profile() {
   const [createLoading, setCreateLoading] = useState(false);
   const [createMessage, setCreateMessage] = useState('');
   const [createError, setCreateError] = useState('');
+  const [questionsFileName, setQuestionsFileName] = useState('');
   const [quizDraft, setQuizDraft] = useState(initialQuizDraft);
 
   useEffect(() => {
@@ -162,6 +216,39 @@ function Profile() {
     }));
   };
 
+  const handleDownloadExample = () => {
+    const blob = new Blob([EXAMPLE_QUIZ_JSON], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'quiz-example.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleQuestionsFileUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setCreateError('');
+    try {
+      const content = await parseQuestionsFile(file);
+      setQuizDraft((current) => ({
+        ...current,
+        questionsJson: content,
+      }));
+      setQuestionsFileName(file.name);
+      setCreateMessage(`Файл ${file.name} загружен`);
+    } catch (error) {
+      setQuestionsFileName('');
+      setCreateError(error?.message || 'Не удалось загрузить JSON-файл');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
   const handleCreateQuiz = async (event) => {
     event.preventDefault();
     setCreateLoading(true);
@@ -187,14 +274,17 @@ function Profile() {
       };
 
       const response = await api.post('/quizzes', payload);
-      setCreateMessage(response?.data?.message || 'Квиз создан. Опубликуйте его в админке, если нужно.');
+      setCreateMessage(response?.data?.message || 'Квиз создан. Теперь он доступен в каталоге.');
       setQuizDraft(initialQuizDraft);
+      setQuestionsFileName('');
     } catch (err) {
       setCreateError(err?.response?.data?.message || err?.message || 'Не удалось создать квиз');
     } finally {
       setCreateLoading(false);
     }
   };
+
+  const hasCreateAccess = canCreateQuiz;
 
   return (
     <div className="profile-page">
@@ -206,7 +296,7 @@ function Profile() {
               {getDisplayName(user)}
             </h1>
             <p style={subtitleStyle}>
-              Смотрите историю прохождений и создавайте новые квизы, если у вас роль creator.
+              Смотрите историю прохождений и создавайте квизы из красивой формы с поддержкой JSON-файлов.
             </p>
           </div>
 
@@ -249,12 +339,11 @@ function Profile() {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={historyTitleStyle}>{item?.title || 'Без названия'}</div>
                       <div style={historyMetaStyle}>
-                        {item?.quiz_type || 'classic'} · {item?.completed_at ? new Date(item.completed_at).toLocaleString('ru') : 'recently'}
+                        {item?.quiz_type || 'classic'} ·{' '}
+                        {item?.completed_at ? new Date(item.completed_at).toLocaleString('ru') : 'recently'}
                       </div>
                     </div>
-                    <div style={historyScoreStyle}>
-                      {Number(item?.percent_score || 0).toFixed(0)}%
-                    </div>
+                    <div style={historyScoreStyle}>{Number(item?.percent_score || 0).toFixed(0)}%</div>
                   </div>
                 ))}
               </div>
@@ -269,44 +358,52 @@ function Profile() {
             )}
           </section>
 
-          {isCreator ? (
-            <section className="profile-card" style={panelStyle}>
+          {hasCreateAccess ? (
+            <section className="profile-card" style={panelStyle} id="create-quiz">
               <div style={sectionHeaderStyle}>
                 <div>
                   <h2 style={sectionTitleStyle}>Создать квиз</h2>
-                  <p style={helperTextStyle}>Форма отправляет данные в реальный backend-контракт `/api/quizzes`.</p>
+                  <p style={helperTextStyle}>
+                    Заполни поля вручную или загрузи готовый JSON. Для примера можно скачать шаблон ниже.
+                  </p>
                 </div>
-                {role === 'admin' ? (
+                {isAdmin ? (
                   <Link to="/admin" style={linkButtonStyle}>
                     Админ-панель
                   </Link>
                 ) : null}
               </div>
 
-              <form onSubmit={handleCreateQuiz} style={formStyle}>
-                <label style={fieldStyle}>
-                  <span style={fieldLabelStyle}>Название</span>
+              <div style={builderToolbarStyle}>
+                <button type="button" onClick={handleDownloadExample} style={secondaryButtonStyle}>
+                  Скачать пример JSON
+                </button>
+                <label style={secondaryButtonStyle}>
                   <input
-                    value={quizDraft.title}
-                    onChange={(e) => handleDraftChange('title', e.target.value)}
-                    placeholder="Например, Великие учёные"
-                    required
-                    style={inputStyle}
+                    ref={questionsInputRef}
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={handleQuestionsFileUpload}
+                    style={{ display: 'none' }}
                   />
+                  <span>Загрузить JSON-файл</span>
                 </label>
+                {questionsFileName ? <span style={fileBadgeStyle}>Файл: {questionsFileName}</span> : null}
+              </div>
 
-                <label style={fieldStyle}>
-                  <span style={fieldLabelStyle}>Описание</span>
-                  <textarea
-                    value={quizDraft.description}
-                    onChange={(e) => handleDraftChange('description', e.target.value)}
-                    placeholder="Короткое описание квиза"
-                    rows={3}
-                    style={textareaStyle}
-                  />
-                </label>
+              <form onSubmit={handleCreateQuiz} style={formStyle}>
+                <div style={heroInputGridStyle}>
+                  <label style={fieldStyle}>
+                    <span style={fieldLabelStyle}>Название квиза</span>
+                    <input
+                      value={quizDraft.title}
+                      onChange={(e) => handleDraftChange('title', e.target.value)}
+                      placeholder="Например, Великие учёные"
+                      required
+                      style={inputStyle}
+                    />
+                  </label>
 
-                <div style={twoColStyle}>
                   <label style={fieldStyle}>
                     <span style={fieldLabelStyle}>Категория</span>
                     <select
@@ -322,7 +419,9 @@ function Profile() {
                       ))}
                     </select>
                   </label>
+                </div>
 
+                <div style={threeColStyle}>
                   <label style={fieldStyle}>
                     <span style={fieldLabelStyle}>Тип квиза</span>
                     <select
@@ -338,17 +437,37 @@ function Profile() {
                       <option value="team">team</option>
                     </select>
                   </label>
+
+                  <label style={fieldStyle}>
+                    <span style={fieldLabelStyle}>Время, минут</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={quizDraft.timeLimitMinutes}
+                      onChange={(e) => handleDraftChange('timeLimitMinutes', e.target.value)}
+                      placeholder="Необязательно"
+                      style={inputStyle}
+                    />
+                  </label>
+
+                  <label style={fieldStyle}>
+                    <span style={fieldLabelStyle}>Параметры</span>
+                    <div style={pillRowStyle}>
+                      <span style={pillStyle}>public</span>
+                      <span style={pillStyle}>shuffle q/a</span>
+                      <span style={pillStyle}>pass 60%</span>
+                    </div>
+                  </label>
                 </div>
 
                 <label style={fieldStyle}>
-                  <span style={fieldLabelStyle}>Ограничение времени, минут</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={quizDraft.timeLimitMinutes}
-                    onChange={(e) => handleDraftChange('timeLimitMinutes', e.target.value)}
-                    placeholder="Необязательно"
-                    style={inputStyle}
+                  <span style={fieldLabelStyle}>Описание</span>
+                  <textarea
+                    value={quizDraft.description}
+                    onChange={(e) => handleDraftChange('description', e.target.value)}
+                    placeholder="Короткое описание квиза"
+                    rows={3}
+                    style={textareaStyle}
                   />
                 </label>
 
@@ -357,14 +476,25 @@ function Profile() {
                   <textarea
                     value={quizDraft.questionsJson}
                     onChange={(e) => handleDraftChange('questionsJson', e.target.value)}
-                    rows={12}
-                    style={textareaStyle}
+                    rows={14}
+                    style={{ ...textareaStyle, minHeight: 260, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
                   />
                 </label>
 
-                <div style={hintStyle}>
-                  Формат вопросов:
-                  <code style={codeStyle}>{'[{ text, options, answerIndex, points, explanation }] '}</code>
+                <div style={hintGridStyle}>
+                  <div style={hintCardStyle}>
+                    <div style={hintTitleStyle}>Как выглядит JSON</div>
+                    <p style={hintTextStyle}>
+                      Это массив вопросов. В каждом вопросе должен быть текст, варианты ответов и хотя бы один
+                      правильный ответ.
+                    </p>
+                  </div>
+                  <div style={hintCardStyle}>
+                    <div style={hintTitleStyle}>Подсказка</div>
+                    <p style={hintTextStyle}>
+                      Можно скачать пример, отредактировать его в любом редакторе и загрузить обратно одной кнопкой.
+                    </p>
+                  </div>
                 </div>
 
                 {createError ? <div style={errorBoxStyle}>{createError}</div> : null}
@@ -464,7 +594,7 @@ const statValueStyle = {
 
 const contentGridStyle = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.08fr) minmax(320px, 0.92fr)',
+  gridTemplateColumns: 'minmax(0, 1.08fr) minmax(360px, 0.92fr)',
   gap: 22,
   alignItems: 'start',
 };
@@ -533,6 +663,70 @@ const formStyle = {
   gap: 14,
 };
 
+const builderToolbarStyle = {
+  marginTop: 18,
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  alignItems: 'center',
+};
+
+const secondaryButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  padding: '12px 16px',
+  borderRadius: 14,
+  border: '1px solid rgba(142, 231, 200, 0.22)',
+  background: 'rgba(142, 231, 200, 0.06)',
+  color: '#e7fff5',
+  fontWeight: 700,
+  cursor: 'pointer',
+  textDecoration: 'none',
+};
+
+const fileBadgeStyle = {
+  padding: '10px 12px',
+  borderRadius: 999,
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(255,255,255,0.04)',
+  color: '#b0bac7',
+  fontSize: 13,
+};
+
+const heroInputGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1.3fr) minmax(220px, 0.7fr)',
+  gap: 12,
+};
+
+const threeColStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: 12,
+};
+
+const pillRowStyle = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  minHeight: 48,
+  alignItems: 'center',
+};
+
+const pillStyle = {
+  padding: '8px 10px',
+  borderRadius: 999,
+  border: '1px solid rgba(142, 231, 200, 0.16)',
+  background: 'rgba(142, 231, 200, 0.08)',
+  color: '#8ee7c8',
+  fontSize: 12,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.8,
+};
+
 const fieldStyle = {
   display: 'grid',
   gap: 8,
@@ -543,12 +737,6 @@ const fieldLabelStyle = {
   fontSize: 13,
   textTransform: 'uppercase',
   letterSpacing: 1,
-};
-
-const twoColStyle = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: 12,
 };
 
 const inputStyle = {
@@ -567,22 +755,30 @@ const textareaStyle = {
   minHeight: 92,
 };
 
-const helperTextStyle = {
-  margin: '8px 0 0',
+const hintGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 12,
+};
+
+const hintCardStyle = {
+  padding: 16,
+  borderRadius: 18,
+  border: '1px solid rgba(255,255,255,0.08)',
+  background: 'rgba(255,255,255,0.03)',
+};
+
+const hintTitleStyle = {
+  fontSize: 14,
+  fontWeight: 800,
+  marginBottom: 8,
+  color: '#f4f7fb',
+};
+
+const hintTextStyle = {
+  margin: 0,
   color: '#b0bac7',
-};
-
-const hintStyle = {
-  color: '#97a3b6',
-  fontSize: 13,
-  lineHeight: 1.5,
-};
-
-const codeStyle = {
-  color: '#8ee7c8',
-  background: 'rgba(142, 231, 200, 0.08)',
-  padding: '2px 6px',
-  border: '1px solid rgba(142, 231, 200, 0.18)',
+  lineHeight: 1.55,
 };
 
 const errorBoxStyle = {
